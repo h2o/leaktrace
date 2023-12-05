@@ -13,13 +13,17 @@
 #define CHUNK_BITS 20
 
 static struct callsite {
+    size_t bytes_alloced;
     size_t alloc_cnt;
     size_t free_cnt;
     size_t collision_cnt;
     void *caller;
 } callsites[1 << CALLSITE_BITS];
 
-static struct callsite *chunks[1 << CHUNK_BITS];
+static struct chunk {
+    struct callsite *cs;
+    size_t sz;
+} chunks[1 << CHUNK_BITS];
 
 static size_t hash(void *p, unsigned bits)
 {
@@ -31,26 +35,42 @@ static size_t hash(void *p, unsigned bits)
     return v % ((size_t)1 << bits);
 }
 
-static void register_chunk(void *p, struct callsite *cs)
+static int cas_chunk(struct chunk *dest, struct chunk expected, struct chunk desired)
+{
+    unsigned char result;
+
+    __asm__ __volatile__("lock cmpxchg16b %1\n\t"
+                         "setz %0"
+                         : "=q"(result), "+m"(*dest), "+d"(expected.sz), "+a"(expected.cs)
+                         : "c"(desired.sz), "b"(desired.cs)
+                         : "cc");
+
+    return result;
+}
+
+static void register_chunk(void *p, struct callsite *cs, size_t sz)
 {
     size_t chunk_slot = hash(p, CHUNK_BITS);
 
-    if (chunks[chunk_slot] == NULL && __sync_bool_compare_and_swap(&chunks[chunk_slot], NULL, cs)) {
-        __sync_fetch_and_add(&chunks[chunk_slot]->alloc_cnt, 1);
+    if (chunks[chunk_slot].cs == NULL && cas_chunk(&chunks[chunk_slot], (struct chunk){}, (struct chunk){cs, sz})) {
+        __sync_fetch_and_add(&cs->bytes_alloced, sz);
+        __sync_fetch_and_add(&cs->alloc_cnt, 1);
     } else {
-        __sync_fetch_and_add(&chunks[chunk_slot]->collision_cnt, 1);
+        __sync_fetch_and_add(&cs->collision_cnt, 1);
     }
 }
 
 static struct callsite *unregister_chunk(void *p)
 {
     size_t chunk_slot = hash(p, CHUNK_BITS);
-    struct callsite *cs = NULL;
+    struct chunk chunk;
 
-    if ((cs = chunks[chunk_slot]) != NULL && __sync_bool_compare_and_swap(&chunks[chunk_slot], cs, NULL))
-        __sync_fetch_and_add(&cs->free_cnt, 1);
+    if ((chunk = chunks[chunk_slot]).cs != NULL && cas_chunk(&chunks[chunk_slot], chunk, (struct chunk){})) {
+        __sync_fetch_and_sub(&chunk.cs->bytes_alloced, chunk.sz);
+        __sync_fetch_and_add(&chunk.cs->free_cnt, 1);
+    }
 
-    return cs;
+    return chunk.cs;
 }
 
 #define DEFINE_ORIGFN(name, rettype, ...)                                                                                          \
@@ -79,7 +99,7 @@ void *malloc(size_t sz)
     if (cs->caller == NULL)
         cs->caller = caller;
 
-    register_chunk(p, cs);
+    register_chunk(p, cs, sz);
 
     return p;
 }
@@ -94,7 +114,7 @@ void *realloc(void *oldp, size_t sz)
 
     struct callsite *cs = unregister_chunk(oldp);
     if (cs != NULL)
-        register_chunk(newp, cs);
+        register_chunk(newp, cs, sz);
 
     return newp;
 }
@@ -112,7 +132,7 @@ void mempt_dump(int fd)
     for (size_t i = 0; i < sizeof(callsites) / sizeof(callsites[0]); ++i) {
         if (callsites[i].caller != NULL) {
             char buf[256];
-            sprintf(buf, "%p:alloc=%zu,free=%zu,collision=%zu\n", callsites[i].caller, callsites[i].alloc_cnt,
+            sprintf(buf, "%p\t%zu\t%zu\t%zu\t%zu\n", callsites[i].caller, callsites[i].bytes_alloced, callsites[i].alloc_cnt,
                     callsites[i].free_cnt, callsites[i].collision_cnt);
             write(fd, buf, strlen(buf));
         }
