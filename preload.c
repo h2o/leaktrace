@@ -1,12 +1,15 @@
 #define _GNU_SOURCE
 #include <assert.h>
-#include <dlfcn.h>
-#include <pthread.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <dlfcn.h>
+#include <pthread.h>
+#include <signal.h>
 #include <unistd.h>
 
 #define CALLSITE_BITS 16
@@ -127,7 +130,7 @@ void free(void *p)
     origfn(p);
 }
 
-void mempt_dump(int fd)
+void leaktrace_dump(int fd)
 {
     for (size_t i = 0; i < sizeof(callsites) / sizeof(callsites[0]); ++i) {
         if (callsites[i].caller != NULL) {
@@ -137,20 +140,34 @@ void mempt_dump(int fd)
             write(fd, buf, strlen(buf));
         }
     }
+
+    write(fd, "\n", 1); /* empty line indicates end of message */
 }
 
-void exit(int status)
+static void on_dump_signal(int signo)
 {
-    static void (*origfn)(int);
-    if (origfn == NULL)
-        origfn = (void (*)(int))dlsym(RTLD_NEXT, "exit");
+    const char *fn = getenv("LEAKTRACE_PATH");
 
-    write(2, "exit\n", 6);
-    mempt_dump(2);
+    if (fn == NULL) {
+        const char *msg = "leaktrace:LEAKTRACE_PATH not set\n";
+        write(2, msg, strlen(msg));
+        return;
+    }
 
-    origfn(status);
+    int fd = open(fn, O_CREAT | O_EXCL | O_WRONLY, 0644);
+    if (fd == -1) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "leaktrace:failed to create file %s for writing (errno=%d)\n", fn, errno);
+        write(2, msg, strlen(msg));
+        return;
+    }
 
-    /* this is a no-return function, suppress warning */
-    while (1)
-        ;
+    leaktrace_dump(fd);
+
+    close(fd);
+}
+
+__attribute__((constructor)) void leaktrace_setup(void)
+{
+    signal(SIGUSR2, on_dump_signal);
 }
