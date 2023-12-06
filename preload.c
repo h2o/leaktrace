@@ -14,13 +14,14 @@
 
 #define CALLSITE_BITS 16
 #define CHUNK_BITS 20
+#define STACK_DEPTH 4
 
 static struct callsite {
     size_t bytes_alloced;
     size_t alloc_cnt;
     size_t free_cnt;
     size_t collision_cnt;
-    void *caller;
+    void *callers[STACK_DEPTH];
 } callsites[1 << CALLSITE_BITS];
 
 struct chunk {
@@ -30,12 +31,27 @@ struct chunk {
 
 static struct chunk chunks[1 << CHUNK_BITS];
 
-static size_t hash(void *p, unsigned bits)
+static void get_callstack(void **stack, void **frame)
 {
-    size_t v = (uintptr_t)p;
+    void *stack_end = (void *)(((uintptr_t)frame + 4095) / 4096 * 4096);
 
-    for (size_t i = bits; i < sizeof(size_t) * 8; i += bits)
-        v ^= v >> i;
+    for (size_t i = 0; i < STACK_DEPTH; ++i) {
+        stack[i] = frame[1];
+        /* check bounds */
+        void **next_frame = (void **)*frame;
+        if (!(frame < next_frame && (void *)(next_frame + 1) < stack_end))
+            break;
+        frame = next_frame;
+    }
+}
+
+static size_t hash(void **ptrs, size_t cnt, unsigned bits)
+{
+    size_t v = 0;
+
+    for (size_t i = 0; i < cnt; ++i)
+        for (size_t j = 0; j < sizeof(size_t) * 8; j += bits)
+            v ^= (uintptr_t)ptrs[i] >> j;
 
     return v % ((size_t)1 << bits);
 }
@@ -55,7 +71,7 @@ static int cas_chunk(struct chunk *dest, struct chunk expected, struct chunk des
 
 static void register_chunk(void *p, struct callsite *cs, size_t sz)
 {
-    size_t chunk_slot = hash(p, CHUNK_BITS);
+    size_t chunk_slot = hash(&p, 1, CHUNK_BITS);
 
     if (chunks[chunk_slot].cs == NULL && cas_chunk(&chunks[chunk_slot], (struct chunk){}, (struct chunk){cs, sz})) {
         __sync_fetch_and_add(&cs->bytes_alloced, sz);
@@ -67,7 +83,7 @@ static void register_chunk(void *p, struct callsite *cs, size_t sz)
 
 static struct callsite *unregister_chunk(void *p)
 {
-    size_t chunk_slot = hash(p, CHUNK_BITS);
+    size_t chunk_slot = hash(&p, 1, CHUNK_BITS);
     struct chunk chunk;
 
     if ((chunk = chunks[chunk_slot]).cs != NULL && cas_chunk(&chunks[chunk_slot], chunk, (struct chunk){})) {
@@ -98,11 +114,25 @@ void *malloc(size_t sz)
     if (p == NULL)
         return NULL;
 
-    void *caller = __builtin_return_address(0);
-    struct callsite *cs = &callsites[hash(caller, CALLSITE_BITS)];
+    void *callers[STACK_DEPTH] = {};
 
-    if (cs->caller == NULL)
-        cs->caller = caller;
+    {
+        void *rbp;
+        asm("mov %%rbp, %0" : "=r" (rbp));
+        get_callstack(callers, rbp);
+    }
+
+    struct callsite *cs = &callsites[hash(callers, STACK_DEPTH, CALLSITE_BITS)];
+
+    if (cs->callers[0] == callers[0]) {
+        /* asume the slot is correct */
+    } else if (__sync_bool_compare_and_swap(&cs->callers[0], NULL, callers[0])) {
+        /* if we succeed in obtaining the slot, copy the rest of the callstack; no need to use atomic insns as we write only once */
+        for (size_t i = 1; i < STACK_DEPTH; ++i)
+            cs->callers[i] = callers[i];
+    } else {
+        /* detected collision TODO log */
+    }
 
     register_chunk(p, cs, sz);
 
@@ -135,10 +165,13 @@ void free(void *p)
 void leaktrace_dump(int fd)
 {
     for (size_t i = 0; i < sizeof(callsites) / sizeof(callsites[0]); ++i) {
-        if (callsites[i].caller != NULL) {
+        if (callsites[i].callers[0] != NULL) {
             char buf[256];
-            sprintf(buf, "%p\t%zu\t%zu\t%zu\t%zu\n", callsites[i].caller, callsites[i].bytes_alloced, callsites[i].alloc_cnt,
-                    callsites[i].free_cnt, callsites[i].collision_cnt);
+            sprintf(buf, "%zu\t%zu\t%zu\t%zu", callsites[i].bytes_alloced, callsites[i].alloc_cnt, callsites[i].free_cnt,
+                    callsites[i].collision_cnt);
+            for (size_t j = 0; j < STACK_DEPTH && callsites[i].callers[j] != NULL; ++j)
+                sprintf(buf + strlen(buf), "\t%p", callsites[i].callers[j]);
+            strcat(buf, "\n");
             write(fd, buf, strlen(buf));
         }
     }
