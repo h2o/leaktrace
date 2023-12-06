@@ -1,5 +1,8 @@
 # leaktrace
-This is a LD_PRELOAD library for tracking memory leaks.
+This is a LD_PRELOAD library for detecting memory leaks.
+
+
+Intended use is to obtain memory dumps multiple times without rebooting a program, then compare the dumps; if we see increase of memory allocated from a particular call site not being freed, that's likely an indication that memory is leaking from that call site.
 
 ## Usage
 
@@ -42,5 +45,3 @@ Descriptions of the columns are as follows:
 * alloc - number of times memory has been allocated from the call site
 * free - number of times memory allocated from the call site has been freed
 * coll - collisions between different call sites, that could have led to inaccurate numbers
-
-Intended use of leaktrace is to obtain the dump multiple times without rebooting the server, then compare the dumps; if we see increase of memory retained by a particular call site, that's likely an indication that memory is leaking from that call site.
