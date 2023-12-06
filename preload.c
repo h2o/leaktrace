@@ -146,14 +146,14 @@ void leaktrace_dump(int fd)
     write(fd, "\n", 1); /* empty line indicates end of message */
 }
 
-static void on_dump_signal(int signo)
+static void *dump_signal_main(void *unused)
 {
     const char *fn = getenv("LEAKTRACE_PATH");
 
     if (fn == NULL) {
         const char *msg = "leaktrace:LEAKTRACE_PATH not set\n";
         write(2, msg, strlen(msg));
-        return;
+        return NULL;
     }
 
     int fd = open(fn, O_CREAT | O_EXCL | O_WRONLY, 0644);
@@ -161,12 +161,21 @@ static void on_dump_signal(int signo)
         char msg[256];
         snprintf(msg, sizeof(msg), "leaktrace:failed to create file %s for writing (errno=%d)\n", fn, errno);
         write(2, msg, strlen(msg));
-        return;
+        return NULL;
     }
 
     leaktrace_dump(fd);
 
     close(fd);
+
+    return NULL;
+}
+
+static void on_dump_signal(int signo)
+{
+    pthread_t thread;
+    pthread_create(&thread, NULL, dump_signal_main, NULL);
+    pthread_detach(thread);
 }
 
 __attribute__((constructor)) void leaktrace_setup(void)
