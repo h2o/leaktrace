@@ -23,10 +23,12 @@ static struct callsite {
     void *caller;
 } callsites[1 << CALLSITE_BITS];
 
-static struct chunk {
+struct chunk {
     struct callsite *cs;
     size_t sz;
-} chunks[1 << CHUNK_BITS];
+} __attribute__((aligned(16)));
+
+static struct chunk chunks[1 << CHUNK_BITS];
 
 static size_t hash(void *p, unsigned bits)
 {
