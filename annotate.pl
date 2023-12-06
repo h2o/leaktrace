@@ -68,10 +68,11 @@ for my $cs (@callsites) {
 
 sub addr2line {
     my ($exe, $addr) = @_;
-    open my $fh, "-|", qw(addr2line -pif -e), $exe, $addr
+    open my $fh, "-|", qw(addr2line -pif -e), $exe, sprintf("%x", $addr)
         or return;
+    local $/;
     my $resolved = <$fh>;
-    chomp $resolved;
+    $resolved =~ s/\n[ \t]*/ /sg;
     $resolved;
 }
 
