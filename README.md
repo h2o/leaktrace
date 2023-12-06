@@ -36,9 +36,11 @@ libcrypto.so.3+1b84a3   8574    14343   13674   0       CRYPTO_strndup at ??:?
 (snip)
 ```
 
-First column is the address of the call site.
-Second column is the amount of unfreed memory that have been allocated from the call site.
-Third and fourth columns indicate how many times memory was allocated from the call site / freed for which they were allocated from the call site.
-Fourth column indicates collisions between different call sites, that could have led to inaccurate numbers.
+Descriptions of the columns are as follows:
+* addr - address of the call site
+* bytes - total amount of memory being allocated from the call site and not yet being freed
+* alloc - number of times memory has been allocated from the call site
+* free - number of times memory allocated from the call site has been freed
+* coll - collisions between different call sites, that could have led to inaccurate numbers
 
 Intended use of leaktrace is to obtain the dump multiple times without rebooting the server, then compare the dumps; if we see increase of memory retained by a particular call site, that's likely an indication that memory is leaking from that call site.
