@@ -14,7 +14,7 @@ This is a LD_PRELOAD library for tracking memory leaks.
 ```
 
 When SIGUSR2 is sent to the program, leaktrace dumps the memory allocation information into the file specified by LEAKTRACE_PATH.
-The file MUST not exist; if it exists, leaktrace will refuse to overwrite.
+When sending SIGUSR2, the file MUST not exist; if it exists, leaktrace will refuse to overwrite.
 
 The dump can be taken any number of times without rebooting h2o.
 
