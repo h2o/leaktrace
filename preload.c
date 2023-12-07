@@ -124,6 +124,25 @@ void *realloc(void *oldp, size_t sz)
     return newp;
 }
 
+int posix_memalign(void **p, size_t align, size_t sz)
+{
+    DEFINE_ORIGFN("posix_memalign", int, void **, size_t, size_t);
+
+    int ret = origfn(p, align, sz);
+    if (ret != 0)
+        return ret;
+
+    void *caller = __builtin_return_address(0);
+    struct callsite *cs = &callsites[hash(caller, CALLSITE_BITS)];
+
+    if (cs->caller == NULL)
+        cs->caller = caller;
+
+    register_chunk(*p, cs, sz);
+
+    return 0;
+}
+
 void free(void *p)
 {
     DEFINE_ORIGFN("free", void, void *p);
