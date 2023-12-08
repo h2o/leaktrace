@@ -33,13 +33,13 @@ static struct chunk chunks[1 << CHUNK_BITS];
 
 static void get_callstack(void **stack, void **frame)
 {
-    void *stack_end = (void *)(((uintptr_t)frame + 4095) / 4096 * 4096);
+    void **stack_end = (void **)(((uintptr_t)frame + 4095) / 4096 * 4096);
 
     for (size_t i = 0; i < STACK_DEPTH; ++i) {
         stack[i] = frame[1];
         /* check bounds */
         void **next_frame = (void **)*frame;
-        if (!(frame < next_frame && (void *)(next_frame + 1) < stack_end))
+        if (!(frame < next_frame && next_frame < stack_end + 1))
             break;
         frame = next_frame;
     }
