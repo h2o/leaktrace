@@ -12,8 +12,12 @@
 #include <signal.h>
 #include <unistd.h>
 
-#define CALLSITE_BITS 16
-#define CHUNK_BITS 20
+#ifndef CALLSITE_BITS
+#define CALLSITE_BITS 20
+#endif
+#ifndef CHUNK_BITS
+#define CHUNK_BITS 24
+#endif
 
 static struct callsite {
     size_t bytes_alloced;
