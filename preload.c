@@ -56,6 +56,23 @@ static size_t hash(void **ptrs, size_t cnt, unsigned bits)
     return v % ((size_t)1 << bits);
 }
 
+static struct callsite *setup_callsite(void **callers)
+{
+    struct callsite *cs = &callsites[hash(callers, STACK_DEPTH, CALLSITE_BITS)];
+
+    if (cs->callers[0] == callers[0]) {
+        /* asume the slot is correct */
+    } else if (__sync_bool_compare_and_swap(&cs->callers[0], NULL, callers[0])) {
+        /* if we succeed in obtaining the slot, copy the rest of the callstack; no need to use atomic insns as we write only once */
+        for (size_t i = 1; i < STACK_DEPTH; ++i)
+            cs->callers[i] = callers[i];
+    } else {
+        /* detected collision TODO log */
+    }
+
+    return cs;
+}
+
 static int cas_chunk(struct chunk *dest, struct chunk expected, struct chunk desired)
 {
     unsigned char result;
@@ -117,18 +134,7 @@ void *malloc(size_t sz)
     void *callers[STACK_DEPTH] = {};
     get_callstack(callers, __builtin_frame_address(0));
 
-    struct callsite *cs = &callsites[hash(callers, STACK_DEPTH, CALLSITE_BITS)];
-
-    if (cs->callers[0] == callers[0]) {
-        /* asume the slot is correct */
-    } else if (__sync_bool_compare_and_swap(&cs->callers[0], NULL, callers[0])) {
-        /* if we succeed in obtaining the slot, copy the rest of the callstack; no need to use atomic insns as we write only once */
-        for (size_t i = 1; i < STACK_DEPTH; ++i)
-            cs->callers[i] = callers[i];
-    } else {
-        /* detected collision TODO log */
-    }
-
+    struct callsite *cs = setup_callsite(callers);
     register_chunk(p, cs, sz);
 
     return p;
@@ -147,6 +153,23 @@ void *realloc(void *oldp, size_t sz)
         register_chunk(newp, cs, sz);
 
     return newp;
+}
+
+int posix_memalign(void **p, size_t align, size_t sz)
+{
+    DEFINE_ORIGFN("posix_memalign", int, void **, size_t, size_t);
+
+    int ret = origfn(p, align, sz);
+    if (ret != 0)
+        return ret;
+
+    void *callers[STACK_DEPTH] = {};
+    get_callstack(callers, __builtin_frame_address(0));
+
+    struct callsite *cs = setup_callsite(callers);
+    register_chunk(*p, cs, sz);
+
+    return 0;
 }
 
 void free(void *p)
