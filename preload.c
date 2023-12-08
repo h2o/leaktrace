@@ -115,12 +115,7 @@ void *malloc(size_t sz)
         return NULL;
 
     void *callers[STACK_DEPTH] = {};
-
-    {
-        void *rbp;
-        asm("mov %%rbp, %0" : "=r" (rbp));
-        get_callstack(callers, rbp);
-    }
+    get_callstack(callers, __builtin_frame_address(0));
 
     struct callsite *cs = &callsites[hash(callers, STACK_DEPTH, CALLSITE_BITS)];
 
