@@ -8,7 +8,7 @@ Intended use is to obtain memory dumps multiple times without rebooting a progra
 
 ### 1. Build the Preload Library
 ```
-% gcc -Wall -Wno-unused-result -g -O2 -fPIC -shared preload.c -o leaktrace.so
+% gcc -Wall -Wno-unused-result -g -O2 -fPIC -shared preload.c -o leaktrace.so -ldl -lpthread
 ```
 
 ### 2. Run Rrograms with the Preload Library being attached
