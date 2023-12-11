@@ -21,7 +21,7 @@ while (my $line = <$fh>) {
     chomp $line;
     $line =~ /^([0-9a-f]+)-([0-9a-f]+)\s+\S+\s+([0-9a-f]+)\s+\S+\s+\S+\s+/
         or die "failed to parse memory mapping line:$line";
-    if ($') {
+    if (substr($', 0, 1) eq '/') {
         push @maps, {start => bighex($1), end => bighex($2), offset => bighex($3), exe => $'};
     }
 }
@@ -35,48 +35,51 @@ while (1) {
     die "unexpected end of line in $dumpfn" unless $line;
     chomp $line;
     last unless $line; # empty line terminates the input
-    $line =~ /^0x([0-9a-f]+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/
-        or die "failed to parse leaktrace dump line:$line";
-    push @callsites, {addr => bighex($1), bytes_alloced => $2, alloc_cnt => $3, free_cnt => $4, collision_cnt => $5};
-}
-
-# annotate the entries @callsites with symbols
-for my $cs (@callsites) {
-    my $map = first { $_->{start} <= $cs->{addr} && $cs->{addr} <= $_->{end} } @maps;
-    if ($map) {
-        $cs->{exe} = $map->{exe};
-        $cs->{exe_off} = $cs->{addr} - $map->{start} + $map->{offset};
-        if (my $loc = addr2line($map->{exe}, $cs->{exe_off})) {
-            $cs->{location} = $loc;
-        }
-    }
+    my ($bytes_alloced, $alloc_cnt, $free_cnt, $collision_cnt, @callers) = split /\s/, $line;
+    push @callsites, {
+        callers       => [ map { bighex($_) } @callers ],
+        bytes_alloced => $bytes_alloced,
+        alloc_cnt     => $alloc_cnt,
+        free_cnt      => $free_cnt,
+        collision_cnt => $collision_cnt,
+    };
 }
 
 # sort the list by bytes_alloced in descending order
 @callsites = sort { $b->{bytes_alloced} <=> $a->{bytes_alloced} } @callsites;
 
 # print
-print "addr\tbytes\talloc\tfree\tcoll\tlocation\n";
 for my $cs (@callsites) {
-    if ($cs->{exe}) {
-        printf "%s+%x", basename($cs->{exe}), $cs->{exe_off};
-    } else {
-        printf "0x%x", $cs->{addr};
+    printf "%d bytes at 0x%x, alloc=%d, free=%d, collision=%d\n", $cs->{bytes_alloced}, $cs->{callers}->[0], $cs->{alloc_cnt}, $cs->{free_cnt}, $cs->{collision_cnt};
+    # resolve addresses
+    for my $addr (@{$cs->{callers}}) {
+        my $map = first { $_->{start} <= $addr && $addr <= $_->{end} } @maps;
+        if ($map) {
+            my $offset = $addr - $map->{start} + $map->{offset};
+            my $loc = addr2line($map->{exe}, $offset)
+                or last;
+            print $loc;
+        }
     }
-    printf "\t%d\t%d\t%d\t%d\t%s\n", $cs->{bytes_alloced}, $cs->{alloc_cnt}, $cs->{free_cnt}, $cs->{collision_cnt}, $cs->{location} || "";
+    print "\n";
 }
 
 sub addr2line {
     my ($exe, $addr) = @_;
     open my $fh, "-|", qw(addr2line -pif -e), $exe, sprintf("%x", $addr)
         or return;
-    local $/;
-    my $resolved = <$fh>;
-    $resolved =~ s/\n[ \t]*/ /sg;
-    $resolved;
+    my @lines = <$fh>;
+    pop @lines
+        if $lines[$#lines] eq '';
+    @lines = map { "  $_" } @lines;
+    join "", @lines;
 }
 
 sub bighex {
+    my $s = shift;
+
+    $s =~ s/^0x//;
+
     no warnings 'portable';
-    hex shift;
+    hex $s;
 }
