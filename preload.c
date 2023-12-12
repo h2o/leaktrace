@@ -148,6 +148,9 @@ void *realloc(void *oldp, size_t sz)
 {
     DEFINE_ORIGFN("realloc", void *, void *oldp, size_t sz);
 
+    if (oldp == NULL)
+        return malloc(sz);
+
     void *newp = origfn(oldp, sz);
     if (newp == NULL)
         return NULL;
